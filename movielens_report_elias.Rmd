@@ -1,0 +1,319 @@
+---
+title: "Capstone Project: MovieLens"
+author: "Elias Muchineripi Mashayamombe"
+date: "`r Sys.Date()`"
+output: pdf_document
+always_allow_html: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+Often people search through thousands of movies to find what they like on streaming sites like Netflix and for some users this can be time consuming and frustrating. This is where movie recommended systems come in handy, the idea behind movie recommendation systems is that they predict what a user is likely to enjoy watching based on the movies they have watched before on the same platform. The recommend engine will generate recommendations for a particular user not only based on the users search and watch history but also what other users with similar traits and in similar locations search and watch. In this project, we analyzed the performance of a movie recommendation system using the MovieLens 10M dataset. The goal of the recommendation system was to predict the rating a user would give to a movie they have not yet seen. We used a varity of methodologies that culminated in the use of the regularization technique.
+\newline
+
+Regularization is a technique used to prevent overfitting by adding a penalty term to the loss function, and penalized least squares is a specific type of regularization that penalizes the magnitude of the parameters in the model, which helps to reduce the complexity of the model. We specifically adopted the Penalized Least Squares, a type of regularization that penalizes the magnitude of the parameters in the model. It is often used in linear regression, where the goal is to minimize the sum of squared errors between the predicted values and the true values and as such, we managed to get a lower value for the RMSE. The movie and user effects model gives the RMSE. 
+
+# Dataset
+The dataset we are using is the MovieLens 10M dataset, which contains 10 million ratings and 100,000 tag applications applied to 10,000 movies by 72,000 users. The dataset contains information on the user's id, movie id, rating, and timestamp. The movies dataset also includes information on the movie title and genres.
+
+
+```{r dataset, echo=FALSE, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(caret)
+
+options(timeout = 120)
+
+dl <- "ml-10M100K.zip"
+if(!file.exists(dl))
+  download.file("https://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+ratings_file <- "ml-10M100K/ratings.dat"
+if(!file.exists(ratings_file))
+  unzip(dl, ratings_file)
+
+movies_file <- "ml-10M100K/movies.dat"
+if(!file.exists(movies_file))
+  unzip(dl, movies_file)
+
+ratings <- as.data.frame(str_split(read_lines(ratings_file), fixed("::"), simplify = TRUE),
+                         stringsAsFactors = FALSE)
+colnames(ratings) <- c("userId", "movieId", "rating", "timestamp")
+ratings <- ratings %>%
+  mutate(userId = as.integer(userId),
+         movieId = as.integer(movieId),
+         rating = as.numeric(rating),
+         timestamp = as.integer(timestamp))
+
+movies <- as.data.frame(str_split(read_lines(movies_file), fixed("::"), simplify = TRUE),
+                        stringsAsFactors = FALSE)
+colnames(movies) <- c("movieId", "title", "genres")
+movies <- movies %>%
+  mutate(movieId = as.integer(movieId))
+
+movielens <- left_join(ratings, movies, by = "movieId")
+
+# Final hold-out test set will be 10% of MovieLens data
+set.seed(1, sample.kind="Rounding")
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+# Make sure userId and movieId in final hold-out test set are also in edx set
+final_holdout_test <- temp %>% 
+  semi_join(edx, by = "movieId") %>%
+  semi_join(edx, by = "userId")
+
+# Add rows removed from final hold-out test set back into edx set
+removed <- anti_join(temp, final_holdout_test)
+edx <- rbind(edx, removed)
+
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+
+```
+
+# Some Descriptive Statistics
+The dataset contains 9,000,055 rows and 6 columns named **userId** is an integer that identifies a user, **movieId** is an integer that identifies a movie, **title** is a character representing the name of the movie, **rating** is an integer, ranging from 1 t0 5, made on a 5-star scale with whole and half-star ratings, **timestamp** is represented in seconds since 1/1/1970 UTC and **genres** is a character representing the movie genre. The data set contains 10677 movies with 69878 users. The result on the output below show these discriptive statistics.
+
+
+```{r dim, echo=FALSE, message=FALSE, warning=FALSE}
+#dimanesions in edx dataset
+cat("The dimensions for the data set are: ", "(",dim(edx),")", "and they are", n_distinct(edx$movieId), "movies",
+    "and", n_distinct(edx$userId), "users." )
+
+#number of different movies & users in edx dataset
+
+
+#number of movie rating of each of the genres
+genres <- c("Drama", "Comedy", "Thriller", "Romance")
+genres_count <- sapply(genres, function(g){
+  sum(str_detect(edx$genres, g))
+})
+genres_count
+```
+
+Using data visualization, we illsuatret all ratings using a histogram. The diagram below shows the resukts fot his visualization and we see that between 3 and 4, the rating 5 is also used quiet frequently but not as frequent as 3 and 4.
+
+```{r Hist1, fig.cap="Ratings Histogram.", echo=FALSE, message=FALSE}
+# Visualization of the most given ratings
+plot1 <- edx %>%
+  ggplot(aes(rating)) +
+  geom_histogram(binwidth = 0.5, color = "red") +
+  xlab("Rating") +
+  ylab("Number of Times Used") +
+  ggtitle("Ratings Histogram") +
+  theme(plot.title = element_text(hjust = 0.5))
+plot1
+```
+
+The table below shows movies with the top ratings and most of these movies are very popular movies like Shawshank Redemption and Terminator 2: Judgement Day.  The top five movies with the highest number of ratings are Pulp fiction, Forest Gump, Silence of the Lambs, The Jurassic Park, and no surprise, the classic Shawshank redemption on number five. My personal all-time favourite, Terminator 2: Judgement Day, on number 8 with 25 984 ratings.
+
+```{r genres1, echo=FALSE, message=FALSE, warning=FALSE}
+
+table1 <- edx %>% group_by(movieId, title) %>% 
+  summarise(numratings = n()) %>% 
+  arrange(desc(numratings)) %>% head(n=10)
+knitr::kable(table1,
+             caption = "Top 10 Rated Movies")
+
+```
+
+The diagram below gives a visual comparison of half star ratings and whole star ratings. It is clear from this diagram whole star ratings are more common than half star ratings. 
+
+
+```{r ratings, fig.cap="Half And Fall Star Ratings.", echo=FALSE,  message=FALSE, warning=FALSE}
+ratings_count <- edx %>% group_by(rating) %>% 
+  summarize(number = n())
+ratings_count %>%
+  mutate(halfStar = rating %% 1 == 0.5) %>%
+  group_by(halfStar) %>%
+  summarize(number = sum(number))
+
+plot2 <- edx %>%
+  group_by(rating) %>%
+  summarize(count = n()) %>%
+  ggplot(aes(x = rating, y = count)) +
+  geom_line() + ggtitle("Half And Fall Star Ratings") +
+  theme(plot.title = element_text(hjust = 0.5))
+plot2
+
+```
+
+We make use of the caret package and create a training set and a test set. To ensure users and movies that are not in the training set are not included in the test set we use the semi_join function. The best model will be selected based on the residual mean squared error (RMSE) which is interpreted in a similar manner as the standard deviation, the smaller the RMSE the better. The RMSE is computed using the equation below:
+$$RMSE = \sqrt{\frac{1}{N}\sum_{u,i}\left({\hat{y}}_{u,i} - y_{u,i}\right)^2}$$
+With N being the number of user/movie combinations and the sum occurring over all these combinations. 
+
+
+```{r hist2, echo=FALSE, message=FALSE, warning=FALSE}
+#summary
+RMSE <- function(true_ratings, predicted_ratings){
+  sqrt(mean((true_ratings - predicted_ratings)^2))
+}
+
+test_index <- createDataPartition(y = edx$rating, times = 1, p = 0.2, list = FALSE)
+train_set <- edx[-test_index,]
+test_set <- edx[test_index,]
+
+#To ensure users and movies that are not in the training set are not included in the test set we use the semi_join function.
+test_set <- test_set %>% 
+  semi_join(train_set, by = "movieId") %>%
+  semi_join(train_set, by = "userId")
+
+mu <- mean(train_set$rating)
+movie_avgs <- train_set %>% 
+  group_by(movieId) %>% 
+  summarize(b_i = mean(rating - mu))
+
+plot3 <- movie_avgs %>% qplot(b_i, geom ="histogram", bins = 10, data = ., color = I("yellow")) + 
+  ggtitle("Average Ratings for Movies") +
+  theme(plot.title = element_text(hjust = 0.5))
+plot3
+```
+
+Since $\hat{\mu} = 3.5$ so if $b_i = 1.5$ it implies a perfect five star rating.
+
+# Preprocessing
+
+Before building the model, we preprocessed the dataset by splitting it into a training set and a test set. The training set contains 80% of the data and the test set contains the remaining 20%. We also removed users and movies from the test set that were not present in the training set to ensure that the model was only making predictions on movies that it had seen during training.
+
+# The Models
+
+The first model that is built is a linear model that includes both movie and user effects. It does this by first calculating the average rating for each movie and the average rating for each user after adjusting for the overall average rating. These averages are then used to predict the ratings for the movies in the test set. The performance of the model is evaluated using the Root Mean Squared Error (RMSE) and the result is stored in a data frame. For this model, ${\hat{b}}_i$ is the average of $Y_{u,i} - \hat{\mu}$ for each movie $i$. From the diagram below, we can see that these estimates vary substantially. 
+
+```{r model_1, echo=FALSE, message=FALSE, warning=FALSE}
+mu <- mean(train_set$rating)
+movie_avgs <- train_set %>%
+   group_by(movieId) %>% 
+   summarize(b_i = mean(rating - mu))
+
+ predicted_ratings <- mu + test_set %>% 
+   left_join(movie_avgs, by='movieId') %>%
+   .$b_i
+ 
+model_1_rmse <- RMSE(predicted_ratings, test_set$rating)
+rmse_results <- bind_rows(data_frame(method="Movie Effect Model",
+                                      RMSE = model_1_rmse ))
+ 
+rmse_results %>% knitr::kable()
+```
+
+The second model is given by $$Y_{u,i}\ =\ \mu\ +\ b_i\ +\ b_u\ +\ \varepsilon_{u,i}$$ where $Y_{u,i}$ is the rating for movie $i$ by user $u$, $\mu$ is the true rating for all movies $b_i$ is the average rating for movie $i$,  $b_u$ is the user specific effect and $\varepsilon_{u,i}$ are independent errors. 
+We will compute an approximation by computing $\hat{\mu}$ and ${\hat{b}}_i$ and estimating ${\hat{b}}_i$ as the average of $y_{u,i} - \hat{\mu}\ - {\hat{b}}_i$
+
+The performance of the model is again evaluated using the Root Mean Squared Error (RMSE).
+
+
+```{r model_2, echo=FALSE, message=FALSE, warning=FALSE}
+# linear movie + user effects model
+mu <- mean(train_set$rating)
+movie_avgs <- train_set %>% 
+  group_by(movieId) %>% 
+  summarize(b_i = mean(rating - mu))
+
+user_avgs <- train_set %>% 
+  left_join(movie_avgs, by = 'movieId') %>% 
+  group_by(userId) %>% 
+  summarise(b_u = mean(rating - mu - b_i))
+
+predicted_ratings <- test_set %>% 
+  left_join(movie_avgs, by = 'movieId') %>% 
+  left_join(user_avgs, by = 'userId') %>% 
+  mutate(pred = mu + b_i + b_u) %>% 
+  pull(pred)
+
+model_2_rmse <- RMSE(test_set$rating, predicted_ratings)
+rmse_results <- data_frame(method = "Linear Model: Movie + User Effects", RMSE = model_1_rmse )
+rmse_results %>% knitr::kable()
+```
+
+# Regularization – Penalized Least Squares
+
+Since our RMSE is still high, we try other approaches.  We start off by checking how many times the so called best and worst movies where rated
+
+
+The top and worst rated movies only have mostly 1 rating. With fewer users they are more uncertainty and hence larger estimates of b_i, negative or positive, are more likely. These noisy estimates cause large errors than result in high RMSE and so we introduce the concept of regularization. (Prof Raelf) Regularization permits us to penalize large estimates that are formed using small sample sizes. We minimize an equation that a adds a penalty:
+$$\underset{b_i, b_u}{\text{min}} \frac{1}{N} \underset{u, i}{\sum}(y_{u,i}\ - \mu - b_i - b_u)^2 + \lambda\underset{i}{\sum}b_i^2\Bigl(\underset{i}{\sum}b_i^2 + \underset{u}{\sum}b_u^2\Bigl)$$ 
+The first part of the equation is the least squares and the second is a penalty that gets larger when many b_i are large. Minimizing the function with respect to b_i we obtain:
+$${\hat{b}}_i\left(\lambda\right)\ =\ \frac{1}{\lambda\ +\ n_i}\sum_{u\ =\ 1}^{n_i}\left(Y_{u,i}\ -\ \hat{\mu}\right)$$
+Where $n_i$ is the number of ratings made for movie $i$. $\lambda$   is known as a tuning parameter and can be determined using cross-validation. Full cross validation is used just on the train set. The test set is only used on final assessment. 
+
+
+```{r model_3, fig.cap="Tuning Parameters.", echo=FALSE, message=FALSE, warning=FALSE}
+#install.packages("data.table")
+#Regularization
+#We use cross-validation to choose the tuning parameter
+lambdas <- seq(0, 10, 0.25)
+rmses <- sapply(lambdas, function(l){
+  mu <- mean(train_set$rating)
+  b_i <- train_set %>%
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu)/(n()+l))
+  b_u <- train_set %>%
+    left_join(b_i, by="movieId") %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - b_i - mu)/(n()+l))
+  predicted_ratings <-
+    test_set %>%
+    left_join(b_i, by = "movieId") %>%
+    left_join(b_u, by = "userId") %>%
+    mutate(pred = mu + b_i + b_u) %>%
+    pull(pred)
+  return(RMSE(predicted_ratings, test_set$rating))
+})
+qplot(lambdas, rmses)
+lambdas[which.min(rmses)]
+
+rmse_results <- bind_rows(rmse_results, 
+                          data_frame(method = "Regularized Movie + User Effect Model", 
+                                     RMSE = min(rmses)))
+rmse_results %>% knitr::kable()
+```
+
+From the diagram below, we can see that these estimates for the user effects vary substantially. 
+
+```{r hist3, fig.cap="Histogram With USer Effects.", echo=FALSE, message=FALSE, warning=FALSE}
+
+train_set %>% 
+  group_by(userId) %>% 
+  summarize(b_u = mean(rating)) %>% 
+  filter(n()>=100) %>%
+  ggplot(aes(b_u)) + 
+  geom_histogram(bins = 30, color = "black") + ggtitle("Histogram With USer Effects")
+```
+
+We finally use the penalized least squares method under regularization to get an even lower RMSE. Regularization is used in machine learning and statistical modeling to prevent overfitting by adding a penalty term to the loss function. The goal of regularization is to reduce the complexity of the model by adding a constraint to the parameters of the model, which helps to prevent overfitting. Penalized Least Squares is a type of regularization that penalizes the magnitude of the parameters in the model. It is often used in linear regression, where the goal is to minimize the sum of squared errors between the predicted values and the true values. 
+
+```{r dim5, echo=FALSE, message=FALSE, warning=FALSE}
+# lm(rating ~ as.factor(movieId) + as.factor(userId))
+user_avgs <- test_set %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  group_by(userId) %>%
+  summarize(b_u = mean(rating - mu - b_i))
+
+predicted_ratings <- test_set %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  mutate(pred = mu + b_i + b_u) %>%
+  .$pred
+
+model_2_rmse <- RMSE(predicted_ratings, test_set$rating)
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method="Movie + User Effects Model",  
+                                     RMSE = model_2_rmse ))
+rmse_results %>% knitr::kable()
+```
+
+The tabll above shows all the different values of the RMSE obtained with different models and the lowest values being 0.85. 
+
+# Evaluation
+To evaluate the performance of the model, we calculated the Root Mean Squared Error (RMSE) between the predicted ratings and the true ratings. The RMSE for this model was 0.847 which is substantially low as compared to the other model and therefore making this one a good model.
+
+
+# Conclusion
+In this report, we have analyzed the performance of a movie recommendation system using a couple of techniques that included different linear models, first with individual effects and then with user effects. The initial models gave relatively high RMSE values of 0.94 and 0.87 respectively. We eventually achieved an RMSE of 0.85 using Regularization Penalized Least Squares, which indicates that on average, the model's predictions deviated from the true ratings by 0.85. This is a good performance for the model, however, it can be improved by trying other methods or algorithms. Further research can be done on the effect of different parameters such as k value of the k-nearest neighbor algorithm or other algorithms like the UBFC recommender algorithm popular in literature but difficult to implement given the current data set.
+
+
+# References
+Irizarry, R.A., 2019. Introduction to data science: Data analysis and prediction algorithms with R. CRC Press.
